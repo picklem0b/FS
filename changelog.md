@@ -4,6 +4,46 @@ All notable changes to FS are recorded here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project uses
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] — 2026-09-19
+
+Seven new tools, all reachable from the folder menu and the command palette,
+plus a store-compliance fix.
+
+### Added
+
+- **Storage analyzer** — recursive size rollup for every subfolder, a ranked
+  "what takes the space" bar view, and the largest files in the tree.
+- **Duplicate content finder** — groups files with identical *contents*
+  (size pre-filter, sampled fingerprint, byte-exact confirmation) and reports
+  reclaimable space. Files can be previewed or deleted straight from a group.
+- **ZIP folder export** — bundles the open folder into a `.zip` (store-only
+  writer with CRC-32 and per-file timestamps) and hands it to the Android
+  share sheet, with file-count and byte caps for huge trees.
+- **Deep search** — recursive search over file names and optionally inside
+  file contents, with line numbers and snippets, regex and case toggles, and
+  binary/oversized files skipped automatically.
+- **Folder snapshots** — capture the current listing, then compare later:
+  added, removed, changed, and renamed (auto-paired) entries with byte
+  deltas, plus a copyable/savable diff report.
+- **Live auto-refresh** — the open folder rescans on a configurable interval
+  (2–60 s), pausing while a dialog is open, with change coalescing so a
+  quiet folder costs nothing.
+- **Places** — pinned and recent folders persisted between sessions, a
+  quick "Switch folder" switcher, and recents ranked by usage.
+- Five new command palette entries: analyze storage, find duplicates, deep
+  search, export ZIP, and compare snapshot.
+- New settings: duplicate finder, ZIP export, live refresh and its interval,
+  and in-file search toggles.
+- 18 new unit tests covering the analyzer, duplicate finder, ZIP writer and
+  exporter, deep search, snapshots, watch service, and places store.
+
+### Fixed
+
+- The manifest no longer declares `repository`: the Acode docs restrict that
+  field to free plugins, so a paid listing with a repository risked rejection.
+- The storage analyzer now honours an explicit depth of 0 instead of falling
+  back to the default.
+
 ## [1.0.0] — 2026-09-11
 
 First release.

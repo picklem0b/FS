@@ -17,6 +17,8 @@ import { PreviewService } from './fs/previews.js';
 import { createAcodeSource } from './fs/source.js';
 import { BatchActions } from './actions/batch.js';
 import { ActionService } from './actions/index.js';
+import { WatchService, clampInterval } from './actions/watch.js';
+import { Places } from './actions/places.js';
 import { WorkspacePanel } from './ui/panel.js';
 import { createSidebarRenderer, SIDEBAR_ID } from './ui/sidebar.js';
 
@@ -37,6 +39,26 @@ const COMMANDS = [
   {
     name: 'fs.summary',
     description: 'FS: Show the folder summary',
+  },
+  {
+    name: 'fs.analyzeStorage',
+    description: 'FS: Analyze folder storage',
+  },
+  {
+    name: 'fs.findDuplicates',
+    description: 'FS: Find duplicate files (by content)',
+  },
+  {
+    name: 'fs.deepSearch',
+    description: 'FS: Deep search (names and file contents)',
+  },
+  {
+    name: 'fs.exportZip',
+    description: 'FS: Export folder as ZIP',
+  },
+  {
+    name: 'fs.compareSnapshot',
+    description: 'FS: Compare with folder snapshot',
   },
 ];
 
@@ -109,6 +131,31 @@ class FsPlugin {
       }),
     );
 
+    // Places (pinned + recent folders) persist through the settings store.
+    this.places = new Places(this.settings, {
+      pinnedKey: 'internal_pinnedFolders',
+      recentsKey: 'internal_recentFolders',
+    });
+
+    // Live watch: paused whenever the panel is closed or a dialog is up.
+    this.watch = new WatchService({
+      scan: () => this.panel ? this.panel.rescan() : Promise.resolve([]),
+      isPaused: () => !this.panel?.open || this.panel?.hasOpenDialog === true,
+      intervalMs: clampInterval((Number(this.settings.get('tools_watchInterval')) || 5) * 1000),
+    });
+    this.panel.setWatch(this.watch);
+    this.panel.setPlaces(this.places);
+    if (this.settings.get('tools_watchEnabled') !== false) this.watch.start();
+
+    this.disposers.push(
+      this.settings.subscribe(() => {
+        const enabled = this.settings.get('tools_watchEnabled') !== false;
+        this.watch.setInterval(clampInterval((Number(this.settings.get('tools_watchInterval')) || 5) * 1000));
+        if (enabled) this.watch.start();
+        else this.watch.stop();
+      }),
+    );
+
     this.registerSidebar();
     this.registerSideButton();
     this.registerCommands();
@@ -152,6 +199,7 @@ class FsPlugin {
     this.panel?.destroy();
     this.panel = null;
     this.sideButton = null;
+    this.watch?.stop();
     this.initialised = false;
   }
 
@@ -221,6 +269,36 @@ class FsPlugin {
         if (!this.panel) return false;
         await this.panel.show();
         this.panel.showDetail();
+        return true;
+      },
+      'fs.analyzeStorage': async () => {
+        if (!this.panel) return false;
+        await this.panel.show();
+        await this.panel.showAnalysis();
+        return true;
+      },
+      'fs.findDuplicates': async () => {
+        if (!this.panel) return false;
+        await this.panel.show();
+        await this.panel.runDuplicateScan();
+        return true;
+      },
+      'fs.deepSearch': async () => {
+        if (!this.panel) return false;
+        await this.panel.show();
+        await this.panel.showDeepSearch();
+        return true;
+      },
+      'fs.exportZip': async () => {
+        if (!this.panel) return false;
+        await this.panel.show();
+        await this.panel.exportZip();
+        return true;
+      },
+      'fs.compareSnapshot': async () => {
+        if (!this.panel) return false;
+        await this.panel.show();
+        await this.panel.compareSnapshot();
         return true;
       },
     };

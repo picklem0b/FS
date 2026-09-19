@@ -8,3 +8,4 @@ import './utils.test.js';
 import './actions.test.js';
 import './report.test.js';
 import './fs.test.js';
+import './features.test.js';

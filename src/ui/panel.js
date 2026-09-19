@@ -12,6 +12,17 @@ import { INTERNAL_KEYS } from '../settings.js';
 import { sortFiles, countByKind } from '../utils/sort.js';
 import { formatSize, formatCount, formatDate, formatRelativeTime, typeLabel } from '../utils/format.js';
 import { buildReport, reportFileName, reportFormat } from '../actions/report.js';
+import { analyzeTree, breakdownForChildren } from '../actions/analyze.js';
+import { findDuplicateContents } from '../actions/duplicates.js';
+import { exportFolderAsZip } from '../actions/exportFolder.js';
+import { deepSearch } from '../actions/deepSearch.js';
+import {
+  captureSnapshot,
+  serializeSnapshot,
+  parseSnapshot,
+  compareSnapshots,
+  formatDiffReport,
+} from '../actions/snapshots.js';
 import { el, clear, icon } from './dom.js';
 import { STYLE_ID, STYLES } from './styles.js';
 
@@ -76,6 +87,23 @@ export class WorkspacePanel {
     /** @type {any[]} */
     this.disposers = [];
     this.backGuardPushed = false;
+
+    /** @type {any} */
+    this.watch = null;
+    /** @type {any} */
+    this.places = null;
+    this.dialogOpen = false;
+    /** @type {any} */
+    this.analysis = null;
+    /** @type {any} */
+    this.duplicates = null;
+    /** @type {{ query: string, regex: boolean, caseSensitive: boolean, inContents: boolean }} */
+    this.searchSpec = { query: '', regex: false, caseSensitive: false, inContents: true };
+    /** @type {any} */
+    this.searchResults = null;
+    /** @type {any} */
+    this.diffResult = null;
+    this.diffReport = '';
 
     this.element = this.buildShell();
     this.scrim = el('div', { class: 'fs-scrim', hidden: true });
@@ -601,6 +629,14 @@ export class WorkspacePanel {
       this.body.appendChild(this.buildDetail());
     } else if (this.view === 'preview') {
       this.body.appendChild(this.buildPreview());
+    } else if (this.view === 'analysis') {
+      this.body.appendChild(this.buildAnalysis());
+    } else if (this.view === 'duplicates') {
+      this.body.appendChild(this.buildDuplicates());
+    } else if (this.view === 'search') {
+      this.body.appendChild(this.buildSearch());
+    } else if (this.view === 'diff') {
+      this.body.appendChild(this.buildDiff());
     } else {
       this.body.appendChild(this.buildList());
     }
@@ -927,6 +963,652 @@ export class WorkspacePanel {
   }
 
   /* ---------------------------------------------------------------- *
+   * Tools: watch and places
+   * ---------------------------------------------------------------- */
+
+  /**
+   * Attach the live watch service.
+   * @param {any} watch - WatchService instance.
+   */
+  setWatch(watch) {
+    this.watch = watch;
+    if (!watch) return;
+    this.disposers.push(
+      watch.onChange(({ changed, entries }) => {
+        if (!changed || !this.open) return;
+        this.entries = this.filterHidden(entries || []);
+        this.analysis = null;
+        this.duplicates = null;
+        this.applyFilterAndSort();
+        this.renderChips();
+        this.renderBody();
+      }),
+    );
+  }
+
+  /**
+   * Attach the places store.
+   * @param {any} places - Places instance.
+   */
+  setPlaces(places) {
+    this.places = places;
+  }
+
+  /**
+   * Whether a modal flow is in progress (pauses the live watch).
+   * @returns {boolean} True when a dialog is open.
+   */
+  get hasOpenDialog() {
+    return this.dialogOpen === true;
+  }
+
+  /**
+   * Scan the current folder without touching the UI; used by the watch.
+   * @returns {Promise<any[]>} Fresh entries.
+   */
+  async rescan() {
+    if (!this.rootUrl) return [];
+    const entries = await this.scanner.getFiles(this.rootUrl, {
+      recursive: this.settings.get('folder_recursive') === true,
+      hideIgnored: true,
+      includeFolders: true,
+      includeFiles: true,
+      limit: Number(this.settings.get('folder_maxFiles')) || 5000,
+      maxDepth: Number(this.settings.get('folder_maxDepth')) || 3,
+    });
+    return this.filterHidden(entries);
+  }
+
+  /**
+   * @param {any[]} entries - Raw entries.
+   * @returns {any[]} Entries with hidden files removed when configured.
+   */
+  filterHidden(entries) {
+    return this.settings.get('display_showHidden') === true
+      ? entries
+      : entries.filter((entry) => !entry.name.startsWith('.'));
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Tools: storage analysis
+   * ---------------------------------------------------------------- */
+
+  /** Run the storage analyzer and show the result. */
+  async showAnalysis() {
+    if (!this.rootUrl) {
+      platform.toast('Open a folder first');
+      return;
+    }
+
+    this.view = 'analysis';
+    this.analysis = null;
+    this.renderBody();
+    this.footerText.textContent = 'Analyzing storage…';
+
+    try {
+      this.analysis = await analyzeTree(this.access, this.rootUrl, {
+        maxDepth: 6,
+        maxEntries: Number(this.settings.get('folder_maxFiles')) || 5000,
+        largest: 15,
+        onProgress: (done) => {
+          this.footerText.textContent = `Analyzing… ${formatCount(done)} entries`;
+        },
+      });
+    } catch (err) {
+      platform.toast(`Analysis failed: ${err?.message || err}`);
+      this.view = 'list';
+    }
+
+    this.renderBody();
+  }
+
+  /**
+   * @returns {HTMLElement} Storage analysis view.
+   */
+  buildAnalysis() {
+    if (!this.analysis) {
+      return el('div', { class: 'fs-empty', text: 'Analyzing folder…' });
+    }
+
+    const { totalSize, fileCount, folderCount, truncated, largestFiles } = this.analysis;
+    const recursive = this.settings.get('folder_recursive') === true;
+
+    let children;
+    if (recursive) {
+      // Direct children of the root: subfolder rollups + the root's own files.
+      const dirs = this.analysis.directories
+        .filter((rollup) => rollup.parent === this.rootUrl)
+        .map((rollup) => ({ name: rollup.name, url: rollup.url, isDirectory: true, size: 0, kind: 'folder' }));
+      children = [...dirs, ...this.analysis.rootFiles];
+    } else {
+      children = this.entries;
+    }
+
+    const rows = breakdownForChildren(this.analysis, children).filter((row) => row.bytes > 0);
+
+    const container = el('div', {}, [
+      el('section', { class: 'fs-section' }, [
+        el('div', { style: { display: 'flex', gap: '6px', marginBottom: '10px' } }, [
+          el('button', {
+            class: 'fs-btn',
+            type: 'button',
+            title: 'Back to the list',
+            on: { click: () => { this.view = 'list'; this.renderBody(); } },
+          }, [icon('back'), el('span', { text: 'Back' })]),
+        ]),
+        el('h3', { text: 'Storage analysis' }),
+        el('dl', { class: 'fs-kv' }, [
+          el('dt', { text: 'Total size' }),
+          el('dd', { text: formatSize(totalSize) }),
+          el('dt', { text: 'Files' }),
+          el('dd', { text: formatCount(fileCount) }),
+          el('dt', { text: 'Folders' }),
+          el('dd', { text: formatCount(folderCount) }),
+        ]),
+        truncated
+          ? el('p', { class: 'fs-meta', text: 'Entry cap reached — these numbers cover what was scanned.' })
+          : null,
+      ]),
+      el('section', { class: 'fs-section' }, [
+        el('h3', { text: 'What takes the space' }),
+        rows.length
+          ? el('div', {}, rows.slice(0, 30).map((row) => this.buildBarRow(row, totalSize)))
+          : el('p', { class: 'fs-meta', text: 'The folder is empty.' }),
+      ]),
+      el('section', { class: 'fs-section' }, [
+        el('h3', { text: 'Largest files' }),
+        this.buildMiniList(largestFiles),
+      ]),
+    ]);
+
+    return container;
+  }
+
+  /**
+   * @param {{ entry: any, bytes: number }} row - Breakdown row.
+   * @param {number} totalSize - Total bytes for percentages.
+   * @returns {HTMLElement} Bar row.
+   */
+  buildBarRow(row, totalSize) {
+    const percent = totalSize > 0 ? Math.max(1, Math.round((row.bytes / totalSize) * 100)) : 0;
+    const open = () => {
+      if (row.entry.isDirectory) this.openRoot(row.entry.url, row.entry.name);
+      else this.activateEntry(row.entry);
+    };
+
+    return el('div', {
+      class: 'fs-bar-row',
+      role: 'button',
+      tabindex: '0',
+      on: { click: open },
+    }, [
+      el('div', { class: 'fs-bar-labels' }, [
+        el('span', { class: 'fs-name', text: row.entry.name }),
+        el('span', { class: 'fs-size', text: `${formatSize(row.bytes)} · ${percent}%` }),
+      ]),
+      el('div', { class: 'fs-bar' }, [
+        el('div', { class: 'fs-bar-fill', style: { width: `${Math.min(100, percent)}%` } }),
+      ]),
+    ]);
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Tools: duplicate content finder
+   * ---------------------------------------------------------------- */
+
+  /** Scan the folder for files with identical contents. */
+  async runDuplicateScan() {
+    if (this.settings.get('tools_duplicatesEnabled') === false) {
+      platform.toast('Duplicate finder is disabled in settings');
+      return;
+    }
+    if (!this.rootUrl) {
+      platform.toast('Open a folder first');
+      return;
+    }
+
+    this.view = 'duplicates';
+    this.duplicates = null;
+    this.renderBody();
+    this.footerText.textContent = 'Scanning for duplicates…';
+
+    try {
+      const files = this.filterHidden(
+        await this.scanner.getFiles(this.rootUrl, {
+          recursive: true,
+          maxDepth: 6,
+          limit: Number(this.settings.get('folder_maxFiles')) || 5000,
+        }),
+      ).filter((entry) => entry.isFile);
+
+      this.duplicates = await findDuplicateContents(files, this.access.source, {
+        onProgress: (done, total) => {
+          this.footerText.textContent = `Hashing ${formatCount(done)} / ${formatCount(total)}`;
+        },
+      });
+    } catch (err) {
+      platform.toast(`Duplicate scan failed: ${err?.message || err}`);
+      this.view = 'list';
+    }
+
+    this.renderBody();
+  }
+
+  /**
+   * @returns {HTMLElement} Duplicates view.
+   */
+  buildDuplicates() {
+    if (!this.duplicates) {
+      return el('div', { class: 'fs-empty', text: 'Scanning for duplicates…' });
+    }
+
+    const { groups, wastedBytes, scanned, skipped, total } = this.duplicates;
+
+    const container = el('div', {}, [
+      el('section', { class: 'fs-section' }, [
+        el('div', { style: { display: 'flex', gap: '6px', marginBottom: '10px' } }, [
+          el('button', {
+            class: 'fs-btn',
+            type: 'button',
+            title: 'Back to the list',
+            on: { click: () => { this.view = 'list'; this.renderBody(); } },
+          }, [icon('back'), el('span', { text: 'Back' })]),
+          el('button', {
+            class: 'fs-btn',
+            type: 'button',
+            title: 'Scan again',
+            on: { click: () => this.runDuplicateScan() },
+          }, [icon('refresh'), el('span', { text: 'Rescan' })]),
+        ]),
+        el('h3', { text: 'Duplicate files' }),
+        el('dl', { class: 'fs-kv' }, [
+          el('dt', { text: 'Duplicate groups' }),
+          el('dd', { text: formatCount(groups.length) }),
+          el('dt', { text: 'Reclaimable' }),
+          el('dd', { text: formatSize(wastedBytes) }),
+          el('dt', { text: 'Hashed' }),
+          el('dd', { text: `${formatCount(scanned)} of ${formatCount(total)}` }),
+        ]),
+        skipped > 0
+          ? el('p', { class: 'fs-meta', text: `${formatCount(skipped)} unique-size or oversized files skipped.` })
+          : null,
+      ]),
+      groups.length
+        ? el('section', { class: 'fs-section' }, groups.slice(0, 50).map((group) =>
+            el('div', { class: 'fs-group' }, [
+              el('p', {
+                class: 'fs-meta',
+                text: `${formatCount(group.files.length)} identical files · ${formatSize(group.size)} each · saves ${formatSize(group.size * (group.files.length - 1))}`,
+              }),
+              ...group.files.map((file) =>
+                el('div', {
+                  class: 'fs-row',
+                  role: 'listitem',
+                  tabindex: '0',
+                  on: { click: () => this.activateEntry(file) },
+                }, [
+                  icon(KIND_ICON[file.kind] || 'file'),
+                  el('div', { class: 'fs-main' }, [
+                    el('span', { class: 'fs-name', text: file.name }),
+                    el('span', { class: 'fs-meta', text: file.url }),
+                  ]),
+                  el('span', { class: 'fs-size', text: formatSize(file.size) }),
+                ]),
+              ),
+            ])))
+        : el('section', { class: 'fs-section' }, [
+            el('p', { class: 'fs-meta', text: 'No duplicate contents found.' }),
+          ]),
+    ]);
+
+    return container;
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Tools: deep search
+   * ---------------------------------------------------------------- */
+
+  /** Open the deep search view. */
+  showDeepSearch() {
+    this.view = 'search';
+    if (!this.searchResults) {
+      this.searchResults = { nameMatches: [], contentMatches: [], scannedContents: 0, truncated: false };
+    }
+    this.renderBody();
+  }
+
+  /** Run the deep search with the current spec. */
+  async runDeepSearch() {
+    if (!this.rootUrl) {
+      platform.toast('Open a folder first');
+      return;
+    }
+
+    const spec = {
+      ...this.searchSpec,
+      inContents:
+        this.searchSpec.inContents && this.settings.get('search_grepEnabled') !== false,
+      maxResults: 200,
+    };
+
+    this.footerText.textContent = 'Searching…';
+
+    try {
+      const entries = this.filterHidden(
+        await this.scanner.getFiles(this.rootUrl, {
+          recursive: true,
+          maxDepth: 6,
+          limit: Number(this.settings.get('folder_maxFiles')) || 5000,
+        }),
+      );
+
+      this.searchResults = await deepSearch(entries, spec, {
+        readText: (url) => this.access.source.readText(url),
+      });
+    } catch (err) {
+      platform.toast(`Search failed: ${err?.message || err}`);
+    }
+
+    this.renderBody();
+  }
+
+  /**
+   * @returns {HTMLElement} Deep search view.
+   */
+  buildSearch() {
+    const results = this.searchResults || { nameMatches: [], contentMatches: [], truncated: false };
+
+    const input = /** @type {HTMLInputElement} */ (
+      el('input', {
+        class: 'fs-input',
+        type: 'search',
+        value: this.searchSpec.query,
+        placeholder: 'Search names and contents',
+        aria: { label: 'Deep search query' },
+        on: {
+          input: () => {
+            this.searchSpec.query = input.value || '';
+          },
+          keydown: (ev) => {
+            if (ev.key === 'Enter') {
+              ev.preventDefault();
+              this.runDeepSearch();
+            }
+          },
+        },
+      })
+    );
+
+    /** @param {string} label @param {keyof typeof this.searchSpec} flag */
+    const toggle = (label, flag) =>
+      el('button', {
+        class: 'fs-chip',
+        type: 'button',
+        text: label,
+        aria: { pressed: String(Boolean(this.searchSpec[flag])) },
+        on: {
+          click: () => {
+            this.searchSpec[flag] = !this.searchSpec[flag];
+            this.renderBody();
+            if (this.searchSpec.query.trim() && flag === 'inContents') this.runDeepSearch();
+          },
+        },
+      });
+
+    const container = el('div', {}, [
+      el('section', { class: 'fs-section' }, [
+        el('div', { style: { display: 'flex', gap: '6px', marginBottom: '8px' } }, [
+          el('button', {
+            class: 'fs-btn',
+            type: 'button',
+            title: 'Back to the list',
+            on: { click: () => { this.view = 'list'; this.renderBody(); } },
+          }, [icon('back')]),
+          input,
+          el('button', {
+            class: 'fs-btn',
+            type: 'button',
+            title: 'Search',
+            on: { click: () => this.runDeepSearch() },
+          }, [icon('search')]),
+        ]),
+        el('div', { class: 'fs-chips', style: { padding: '0' } }, [
+          toggle('Aa', 'caseSensitive'),
+          toggle('.*', 'regex'),
+          toggle('In files', 'inContents'),
+        ]),
+      ]),
+      el('section', { class: 'fs-section' }, [
+        el('h3', { text: `Names (${formatCount(results.nameMatches.length)})` }),
+        results.nameMatches.length
+          ? el('div', { class: 'fs-list' }, results.nameMatches.map((entry) => this.buildRow(entry)))
+          : el('p', { class: 'fs-meta', text: 'Type a query and press Search.' }),
+      ]),
+    ]);
+
+    if (results.contentMatches?.length) {
+      container.appendChild(
+        el('section', { class: 'fs-section' }, [
+          el('h3', { text: `In file contents (${formatCount(results.contentMatches.length)} files)` }),
+          ...results.contentMatches.slice(0, 40).map((match) =>
+            el('div', { class: 'fs-group' }, [
+              el('p', { class: 'fs-name', text: match.entry.name }),
+              ...match.hits.slice(0, 5).map((hit) =>
+                el('p', { class: 'fs-hit', text: `L${hit.line}: ${hit.text}` })),
+            ])),
+        ]),
+      );
+    }
+
+    if (results.truncated) {
+      container.appendChild(
+        el('section', { class: 'fs-section' }, [
+          el('p', { class: 'fs-meta', text: 'Result cap reached — narrow the query to see more.' }),
+        ]),
+      );
+    }
+
+    return container;
+  }
+
+  /* ---------------------------------------------------------------- *
+   * Tools: ZIP export and snapshots
+   * ---------------------------------------------------------------- */
+
+  /** Bundle the open folder into a ZIP and hand it to the share sheet. */
+  async exportZip() {
+    if (this.settings.get('tools_zipEnabled') === false) {
+      platform.toast('ZIP export is disabled in settings');
+      return;
+    }
+    if (!this.rootUrl) {
+      platform.toast('Open a folder first');
+      return;
+    }
+
+    this.dialogOpen = true;
+    const confirmed = await platform.confirm(
+      'Export ZIP',
+      'Bundle this folder into a .zip archive?',
+    );
+    this.dialogOpen = false;
+    if (!confirmed) return;
+
+    this.footerText.textContent = 'Packing…';
+
+    try {
+      const result = await exportFolderAsZip(this.access, this.access.source, this.rootUrl, {
+        onProgress: (done, total) => {
+          this.footerText.textContent = `Packing ${formatCount(done)} / ${formatCount(total)}`;
+          this.progressWidth(total ? done / total : 0);
+        },
+      });
+
+      if (!result.ok) {
+        platform.toast(`Export failed: ${result.message || 'unknown error'}`);
+        return;
+      }
+
+      const name = zipName(this.rootTitle || basename(this.rootUrl));
+      const shared = await this.actions.shareBytes(result.bytes, name, 'application/zip');
+      platform.toast(
+        shared
+          ? `Archive ready — ${formatCount(result.count)} files${result.truncated ? ' (folder exceeded export limits)' : ''}`
+          : 'Sharing is unavailable on this device',
+      );
+    } catch (err) {
+      platform.toast(`Export failed: ${err?.message || err}`);
+    } finally {
+      this.progressWidth(0);
+      this.footerText.textContent = this.statusLine();
+    }
+  }
+
+  /** Capture a snapshot of the current listing. */
+  async takeSnapshot() {
+    if (!this.rootUrl) {
+      platform.toast('Open a folder first');
+      return;
+    }
+
+    const snapshot = captureSnapshot(this.rootUrl, this.rootTitle, this.entries, {
+      recursive: this.settings.get('folder_recursive') === true,
+    });
+    this.settings.set(INTERNAL_KEYS.snapshot, serializeSnapshot(snapshot), { silent: true });
+    platform.toast(`Snapshot taken (${formatCount(snapshot.entries.length)} entries)`);
+  }
+
+  /** Compare the current listing against the stored snapshot. */
+  async compareSnapshot() {
+    if (!this.rootUrl) {
+      platform.toast('Open a folder first');
+      return;
+    }
+
+    const before = parseSnapshot(this.settings.get(INTERNAL_KEYS.snapshot, '') || '');
+    if (!before) {
+      platform.toast('No snapshot yet — take one from the folder menu first');
+      return;
+    }
+
+    this.footerText.textContent = 'Comparing…';
+
+    try {
+      const entries = this.filterHidden(
+        await this.scanner.getFiles(this.rootUrl, {
+          recursive: before.recursive === true,
+          limit: Number(this.settings.get('folder_maxFiles')) || 5000,
+        }),
+      );
+
+      const after = captureSnapshot(this.rootUrl, this.rootTitle, entries, {
+        recursive: before.recursive === true,
+      });
+      this.diffResult = compareSnapshots(before, after);
+      this.diffReport = formatDiffReport(before, this.diffResult, 'now');
+      this.view = 'diff';
+    } catch (err) {
+      platform.toast(`Compare failed: ${err?.message || err}`);
+    }
+
+    this.renderBody();
+  }
+
+  /**
+   * @returns {HTMLElement} Snapshot diff view.
+   */
+  buildDiff() {
+    const diff = this.diffResult;
+
+    const container = el('div', {}, [
+      el('section', { class: 'fs-section' }, [
+        el('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap', marginBottom: '10px' } }, [
+          el('button', {
+            class: 'fs-btn',
+            type: 'button',
+            title: 'Back to the list',
+            on: { click: () => { this.view = 'list'; this.renderBody(); } },
+          }, [icon('back'), el('span', { text: 'Back' })]),
+          el('button', {
+            class: 'fs-btn',
+            type: 'button',
+            title: 'Copy the diff report',
+            on: {
+              click: async () => {
+                const ok = await this.actions.copyText(this.diffReport);
+                platform.toast(ok ? 'Diff copied' : 'Could not copy the diff');
+              },
+            },
+          }, [icon('copy'), el('span', { text: 'Copy' })]),
+          el('button', {
+            class: 'fs-btn',
+            type: 'button',
+            title: 'Save the diff report in this folder',
+            on: { click: () => this.saveDiffReport() },
+          }, [icon('file'), el('span', { text: 'Save' })]),
+        ]),
+        el('h3', { text: 'Snapshot diff' }),
+        diff
+          ? el('dl', { class: 'fs-kv' }, [
+              el('dt', { text: 'Added' }),
+              el('dd', { text: `${formatCount(diff.added.length)} (+${formatSize(diff.bytesAdded)})` }),
+              el('dt', { text: 'Removed' }),
+              el('dd', { text: `${formatCount(diff.removed.length)} (−${formatSize(diff.bytesRemoved)})` }),
+              el('dt', { text: 'Changed' }),
+              el('dd', { text: formatCount(diff.changed.length) }),
+              el('dt', { text: 'Renamed' }),
+              el('dd', { text: formatCount(diff.renamed.length) }),
+            ])
+          : el('p', { class: 'fs-meta', text: 'Nothing to compare.' }),
+      ]),
+      el('section', { class: 'fs-section' }, [
+        el('pre', { class: 'fs-code', text: this.diffReport || '—' }),
+      ]),
+    ]);
+
+    return container;
+  }
+
+  /** Save the diff report as a text file in the open folder. */
+  async saveDiffReport() {
+    if (!this.rootUrl) return;
+
+    const stamp = new Date().toISOString().slice(0, 10);
+    const title = this.rootTitle || basename(this.rootUrl);
+    const name = `${sanitizeName(title)}-diff-${stamp}.txt`;
+
+    const result = await this.actions.saveTextFile(this.rootUrl, name, this.diffReport);
+    platform.toast(result.ok ? `Saved ${name}` : `Could not save: ${result.message || 'error'}`);
+    if (result.ok) await this.refresh();
+  }
+
+  /** Show pinned and recent folders as a quick switcher. */
+  async showPlacesSwitcher() {
+    if (!this.places) {
+      platform.toast('Places are unavailable');
+      return;
+    }
+
+    const pins = this.places.pinned();
+    const recents = this.places.recents().filter((place) => place.url !== this.rootUrl);
+
+    if (!pins.length && !recents.length) {
+      platform.toast('No pinned or recent folders yet');
+      return;
+    }
+
+    const all = [...pins, ...recents];
+    const choice = await platform.select(
+      'Switch folder',
+      all.map((place) => ({ value: place.url, text: pins.includes(place) ? `★ ${place.title}` : place.title })),
+    );
+    if (!choice) return;
+
+    const place = all.find((item) => item.url === choice);
+    await this.openRoot(choice, place?.title);
+  }
+
+  /* ---------------------------------------------------------------- *
    * Menus
    * ---------------------------------------------------------------- */
 
@@ -966,10 +1648,17 @@ export class WorkspacePanel {
     const directory = this.rootUrl;
     this.showMenu(ev, [
       ['Change folder', () => this.chooseFolder().then(() => this.refresh())],
+      ['Switch folder (Places)', () => this.showPlacesSwitcher()],
       ['New file', () => directory && this.actions.createFile(directory).then(() => this.refresh())],
       ['New folder', () => directory && this.actions.createFolder(directory).then(() => this.refresh())],
       ['Export folder report', () => this.exportReport()],
       ['View report page', () => this.showReportPage()],
+      ['Export folder as ZIP', () => this.exportZip()],
+      ['Analyze storage', () => this.showAnalysis()],
+      ['Find duplicate files', () => this.runDuplicateScan()],
+      ['Deep search', () => this.showDeepSearch()],
+      ['Take snapshot', () => this.takeSnapshot()],
+      ['Compare with snapshot', () => this.compareSnapshot()],
       ['Folder summary', () => this.showDetail()],
       ['Refresh', () => this.refresh()],
     ]);
@@ -1353,6 +2042,26 @@ function clampDockWidth(width) {
 function basename(url) {
   const parts = String(url || '').split('/').filter(Boolean);
   return parts[parts.length - 1] || url;
+}
+
+/**
+ * Build an archive file name for a folder.
+ * @param {string} title - Folder title.
+ * @returns {string} Zip file name.
+ */
+function zipName(title) {
+  return `${sanitizeName(title)}.zip`;
+}
+
+/**
+ * Reduce a title to a safe file name.
+ * @param {string} title - Raw title.
+ * @returns {string} Safe name.
+ */
+function sanitizeName(title) {
+  const value = String(title || 'folder').trim();
+  const safe = value.replace(/[\\/:*?"<>|]+/g, '-').replace(/\s+/g, ' ');
+  return safe || 'folder';
 }
 
 /**

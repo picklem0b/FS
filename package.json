@@ -1,7 +1,7 @@
 {
   "name": "fs-folder-workspace",
-  "version": "1.0.0",
-  "description": "Acode plugin: inspect, understand, and manage a folder — sizes, dates, types, previews, summaries, batch actions, and report export.",
+  "version": "1.1.0",
+  "description": "Acode plugin: inspect, understand, and manage your folders and files — sizes, dates, types, previews, summaries, batch actions, and report export.",
   "main": "dist/main.js",
   "repository": "https://github.com/picklem0b/FS.git",
   "author": "LethaboK <lethabokhedama@gmail.com> (https://github.com/picklem0b)",

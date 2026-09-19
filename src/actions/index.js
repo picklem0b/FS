@@ -324,12 +324,25 @@ export class ActionService {
    * @returns {Promise<boolean>} Whether the share sheet was opened.
    */
   async shareText(text, name, mime) {
+    return this.shareBytes(new TextEncoder().encode(text), name, mime);
+  }
+
+  /**
+   * Share in-memory bytes through the platform share sheet.
+   *
+   * @param {Uint8Array} bytes - Content to share.
+   * @param {string} name - Suggested file name.
+   * @param {string} mime - Content type.
+   * @returns {Promise<boolean>} Whether the share sheet was opened.
+   */
+  async shareBytes(bytes, name, mime) {
     try {
       if (typeof navigator === 'undefined' || !navigator.share || typeof File === 'undefined') {
         return false;
       }
 
-      const file = new File([text], name, { type: mime });
+      const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+      const file = new File([view], name, { type: mime });
       if (navigator.canShare && !navigator.canShare({ files: [file] })) return false;
 
       await navigator.share({ files: [file], title: name });

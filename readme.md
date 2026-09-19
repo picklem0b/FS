@@ -50,6 +50,31 @@ layouts.
   sequentially, or change every extension at once.
 - Create new files and folders in the current directory.
 
+**The paid toolkit**
+
+- **Storage analyzer** — see where the bytes live: a recursive size rollup
+  for every subfolder, a ranked bar view of what takes the space, and the
+  largest files in the whole tree. Tap a bar to descend.
+- **Duplicate content finder** — finds files with identical *contents*, not
+  just names: cheap size pre-filter, sampled fingerprint for large files,
+  then byte-exact confirmation so a group is a group. Shows reclaimable
+  space and lets you preview or delete from the group.
+- **ZIP export** — bundle the folder into a `.zip` built on device (store
+  method, CRC-32, real per-file timestamps) and share it anywhere through
+  the Android share sheet.
+- **Deep search** — search names *and* file contents across the whole tree,
+  with line numbers and snippets, regex and case toggles. Binary and
+  oversized files are skipped automatically, results are capped.
+- **Snapshots** — take a snapshot of a folder, keep working, then compare:
+  added, removed, changed, and renamed entries with byte deltas, and a
+  diff report you can copy or save. Renames are paired automatically
+  instead of showing as add+remove noise.
+- **Live auto-refresh** — the listing rescans on a configurable interval
+  (2–60 seconds) and pauses while a dialog is open, so what you see is
+  what is on disk.
+- **Places** — pin the folders you live in and jump between them from the
+  quick switcher; recent folders are remembered and ranked by use.
+
 **Report the folder**
 
 - Export a report of the folder as **plain text**, **Markdown**, **CSV**, or a
@@ -93,7 +118,10 @@ filter, or the selection.
   workspace folders already open in Acode.
 - **Side button** — toggles the workspace panel.
 - **Command palette** — `FS: Open the folder workspace`, `FS: Choose a folder to
-  inspect`, `FS: Refresh the open folder`, `FS: Show the folder summary`.
+  inspect`, `FS: Refresh the open folder`, `FS: Show the folder summary`,
+  `FS: Analyze folder storage`, `FS: Find duplicate files (by content)`,
+  `FS: Deep search (names and file contents)`, `FS: Export folder as ZIP`,
+  `FS: Compare with folder snapshot`.
 
 ## Settings
 
@@ -105,7 +133,7 @@ Everything the panel shows is configurable from Acode's plugin settings page.
 | Sorting | Default sort field, direction, folders-first |
 | Preview | Text previews, image previews, text preview size limit |
 | Scanning | Scan subfolders, maximum depth, maximum entries, ignore globs |
-| Tools | Batch actions, cleanup insights, confirm destructive actions, large-file threshold, recent-file window |
+| Tools | Batch actions, cleanup insights, confirm destructive actions, large-file threshold, recent-file window, duplicate finder, ZIP export, live auto-refresh and interval, in-file search |
 | Reports | Report format (text, Markdown, CSV, HTML page), include full paths, include the file listing |
 | Layout | Panel layout, dock side, remember last folder |
 
@@ -147,7 +175,9 @@ src/
   settings.js    settings schema and persistent store
   fs/            folder access, scanning, file reading, previews
   utils/         formatting, sorting, pattern matching
-  actions/       file operations, batch actions, cleanup insights
+  actions/       file operations, batch actions, cleanup insights,
+                 storage analysis, duplicate finder, deep search, snapshots,
+                 ZIP export, live watch, places
   ui/            panel, sidebar launcher, DOM helpers, styles
 test/            unit tests (bundled with esbuild and run under Node)
 scripts/         test runner

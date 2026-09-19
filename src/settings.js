@@ -252,6 +252,49 @@ export const SETTINGS_SCHEMA = [
     info: 'Turn off for a summary-only report.',
   },
 
+  // --- Tools (new features) ------------------------------------------------
+  {
+    key: 'tools_duplicatesEnabled',
+    text: 'Duplicate content finder',
+    type: 'boolean',
+    defaultValue: true,
+    group: 'Tools',
+    info: 'Detect files with identical contents and how much space they waste.',
+  },
+  {
+    key: 'tools_zipEnabled',
+    text: 'ZIP folder export',
+    type: 'boolean',
+    defaultValue: true,
+    group: 'Tools',
+    info: 'Bundle the open folder into a .zip archive.',
+  },
+  {
+    key: 'tools_watchEnabled',
+    text: 'Live auto-refresh',
+    type: 'boolean',
+    defaultValue: true,
+    group: 'Tools',
+    info: 'Rescan the open folder periodically so the listing stays current.',
+  },
+  {
+    key: 'tools_watchInterval',
+    text: 'Auto-refresh interval (seconds)',
+    type: 'number',
+    defaultValue: 5,
+    group: 'Tools',
+    prompt: 'Seconds between automatic rescans (2–60)',
+    promptType: 'number',
+  },
+  {
+    key: 'search_grepEnabled',
+    text: 'Search inside files',
+    type: 'boolean',
+    defaultValue: true,
+    group: 'Tools',
+    info: 'Deep search also scans file contents, with line hits.',
+  },
+
   // --- Layout --------------------------------------------------------------
   {
     key: 'layout_mode',
@@ -294,6 +337,8 @@ export const INTERNAL_KEYS = {
   panelWidth: 'internal_panelWidth',
   expanded: 'internal_expanded',
   recentFolders: 'internal_recentFolders',
+  pinnedFolders: 'internal_pinnedFolders',
+  snapshot: 'internal_snapshot',
 };
 
 /** Icon shown next to each setting row in Acode's plugin page. */
