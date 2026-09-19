@@ -1,22 +1,33 @@
 {
   "$schema": "https://acode.app/schema/plugin/v0.1.0.json",
-  "id": "acode.plugin",
-  "name": "Plugin",
+  "id": "acode.fs.util",
+  "name": "FS — Folder Workspace",
+  "description": "Inspect, understand, and manage a folder from inside Acode: sizes, dates, types, quick previews, folder summaries, batch actions, and cleanup insights — with a full-screen layout on phones and a resizable docked panel on larger screens.",
   "main": "main.js",
   "version": "1.0.0",
   "readme": "readme.md",
   "changelogs": "changelog.md",
-  "repository": "https://github.com/Acode-Foundation/acode-plugin.git",
+  "repository": "https://github.com/picklem0b/FS.git",
   "icon": "icon.png",
   "files": [],
   "minVersionCode": 290,
   "license": "MIT",
-  "keywords": [],
-  "price": 0,
+  "keywords": [
+    "folder",
+    "file manager",
+    "file size",
+    "workspace",
+    "cleanup",
+    "batch rename",
+    "duplicates",
+    "storage",
+    "preview"
+  ],
+  "price": 59,
   "permissions": [],
   "author": {
-    "name": "",
-    "email": "",
-    "github": ""
+    "name": "LethaboK",
+    "email": "lethabokhedama@gmail.com",
+    "github": "https://github.com/picklem0b"
   }
 }

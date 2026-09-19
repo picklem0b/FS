@@ -16,7 +16,8 @@
   },
   "scripts": {
     "dev": "node esbuild.config.mjs --serve",
-    "build": "node esbuild.config.mjs"
+    "build": "node esbuild.config.mjs",
+    "test": "node scripts/test.mjs"
   },
   "browserslist": "cover 100%,not android < 5"
 }
